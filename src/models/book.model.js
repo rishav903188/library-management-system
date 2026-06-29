@@ -34,8 +34,12 @@ const bookSchema = new mongoose.Schema(
       default: 1,
       min: 0,
     },
+    coverImage: {
+      type: String,
+      default: null,
+    },
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 module.exports = mongoose.model("Book", bookSchema);
