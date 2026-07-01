@@ -4,6 +4,7 @@ const path = require("path");
 const authRoutes = require("./routes/auth.routes");
 const bookRoutes = require("./routes/book.routes");
 const borrowRoutes = require("./routes/borrow.routes");
+const fineRoutes = require("./routes/fine.routes")
 
 const app = express();
 
@@ -13,12 +14,13 @@ app.use(express.json());
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
 app.get("/", (req, res) => {
-  res.json({ message: "Library Management System API — v1.1 File Upload" });
+  res.json({ message: "Library Management System API — v1.2 Fine Management" });
 });
 
 app.use("/api/auth", authRoutes);
 app.use("/api/books", bookRoutes);
 app.use("/api/borrow", borrowRoutes);
+app.use("/api/fines", fineRoutes)
 
 app.use((req, res) => {
   res.status(404).json({ message: "Route not found" });

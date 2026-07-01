@@ -1,6 +1,7 @@
 // src/controllers/borrow.controller.js
 const Borrow = require("../models/borrow.model");
 const Book = require("../models/book.model");
+const { createFineIfLate } = require("../services/fine.service");
 
 const DEFAULT_BORROW_DAYS = 14;
 
@@ -14,7 +15,6 @@ const borrowBook = async (req, res) => {
       return res.status(400).json({ message: "No copies available right now" });
     }
 
-    // user ka same book already borrowed (not returned) to dobara mat dena
     const alreadyBorrowed = await Borrow.findOne({
       user: req.user._id,
       book: book._id,
@@ -48,7 +48,8 @@ const borrowBook = async (req, res) => {
 const returnBook = async (req, res) => {
   try {
     const borrow = await Borrow.findById(req.params.borrowId);
-    if (!borrow) return res.status(404).json({ message: "Borrow record not found" });
+    if (!borrow)
+      return res.status(404).json({ message: "Borrow record not found" });
 
     if (borrow.user.toString() !== req.user._id.toString()) {
       return res.status(403).json({ message: "Not your borrow record" });
@@ -68,6 +69,14 @@ const returnBook = async (req, res) => {
       await book.save();
     }
 
+    const fine = await createFineIfLate(borrow);
+res.json({
+  borrow,
+  fine: fine || null,
+  message: fine
+    ? `Book returned late by ${fine.daysLate} day(s). Find of ₹${fine.amount} added.`
+    : "Book returned on time. No fine.",
+});
     res.json(borrow);
   } catch (err) {
     res.status(500).json({ message: err.message });
