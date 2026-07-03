@@ -2,7 +2,7 @@ const express = require("express");
 
 const {
     reserveBook,
-    getMyReservation,
+    getMyReservations,
     cancelReservation,
 }= require("../controllers/reservation.controller");
 

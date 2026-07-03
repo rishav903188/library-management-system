@@ -5,7 +5,7 @@ const {protect} = require("../middlewares/auth.middleware");
 const router = express.Router();
 
 router.get("/my",protect, getMyFines);
-router.get("/:id/pay", protect,payFine );
+router.post("/:id/pay", protect,payFine );
 router.get("/",protect,getAllFines);
 
 module.exports = router;

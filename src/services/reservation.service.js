@@ -63,6 +63,10 @@ const fulfilNextReservation = async (bookId)=>{
         book.availableCopies -=1;
         await book.save();
     }
+    const user = await UserActivation.findById(next.user);
+    if(user && book){
+        await sendReservationReadyEmail(user, book);
+    }
     return next;
 };
 

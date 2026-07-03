@@ -3,6 +3,7 @@ const Book = require("../models/book.model");
 const Reservation = require("../models/reservation.model");
 const { createFineIfLate } = require("../services/fine.service");
 const { fulfillNextReservation } = require("../services/reservation.service");
+const { sendFineNoticeEmail } = require("../services/email.service");
 
 const DEFAULT_BORROW_DAYS = 14;
 
@@ -85,6 +86,15 @@ const returnBook = async (req, res) => {
     const fine = await createFineIfLate(borrow);
 
     const notified = await fulfillNextReservation(borrow.book);
+    const user = await UserActivation.findById(borrow.user);
+
+    if(user && book){
+      await sendReturnConfirmationEmail(user, book);
+
+      if(fine){
+        await sendFineNoticeEmail(user, book , fine);
+      }
+    }
     res.json({
       borrow,
       fine: fine || null,
