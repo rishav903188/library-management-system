@@ -7,6 +7,7 @@ const borrowRoutes = require("./routes/borrow.routes");
 const fineRoutes = require("./routes/fine.routes");
 const reservationRoutes = require("./routes/reservation.routes");
 const reportRoutes = require("./routes/report.routes");
+const adminRoutes = require("./routes/admin.routes");
 
 const app = express();
 
@@ -15,7 +16,7 @@ app.use(express.json());
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
 app.get("/", (req, res) => {
-  res.json({ message: "Library Management System API — v1.5 PDF Reports" });
+  res.json({ message: "Library Management System API — v1.6 Admin Analytics" });
 });
 
 app.use("/api/auth", authRoutes);
@@ -24,6 +25,7 @@ app.use("/api/borrow", borrowRoutes);
 app.use("/api/fines", fineRoutes);
 app.use("/api/reservations", reservationRoutes);
 app.use("/api/reports", reportRoutes);
+app.use("/api/admin", adminRoutes);
 
 app.use((req, res) => {
   res.status(404).json({ message: "Route not found" });
