@@ -1,0 +1,80 @@
+
+services:
+
+  # PostgreSQL Service
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: library_postgres
+    restart: unless-stopped
+    
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+
+    ports:
+      - "5433:5432"
+    
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    
+
+    networks:
+      - library_network
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    
+
+  # App Service
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: library_app
+    restart: unless-stopped
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+    environment:
+      PORT: 8000
+      NODE_ENV: production
+      DATABASE_URL: postgresql://${DB_USER}:${DB_PASSWORD}@postgres:${DB_PORT}/${DB_NAME}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN}
+      EMAIL_HOST: ${EMAIL_HOST}
+      EMAIL_PORT: ${EMAIL_PORT}
+      EMAIL_USER: ${EMAIL_USER}
+      EMAIL_PASS: ${EMAIL_PASS}
+      EMAIL_FROM: ${EMAIL_FROM}
+      DB_HOST: postgres
+      DB_PORT: ${DB_PORT}
+      DB_USER: ${DB_USER}
+
+    ports:
+      - "8000:8000"
+
+    volumes:
+      - uploads_data:/app/src/uploads
+      - reports_data:/app/src/reports
+
+    networks:
+      - library_network
+
+# Named Volumes
+volumes:
+  postgres_data:
+  uploads_data:
+  reports_data:
+
+# Network
+networks:
+  library_network:
+    driver: bridge

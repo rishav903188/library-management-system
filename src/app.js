@@ -17,7 +17,7 @@ app.use(express.json());
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
 app.get("/", (req, res) => {
-  res.json({ message: "Library Management System API — v1.7 Recommendation Engine" });
+  res.json({ message: "Library Management System API — v2.0.3" });
 });
 
 app.use("/api/auth", authRoutes);
