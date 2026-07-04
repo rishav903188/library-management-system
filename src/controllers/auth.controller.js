@@ -1,71 +1,76 @@
 const jwt = require("jsonwebtoken");
-const User = require("../models/user.model");
+const bcrypt = require("bcryptjs");
+const prisma = require("../config/prisma");
 
-const generateToken = (id)=>{
-    return jwt.sign({id}, process.env.JWT_SECRET,{
-        expiresIn: process.env.JWT_EXPIRES_IN || "7d",
+
+
+const generateToken = (id) => {
+  return jwt.sign({ id }, process.env.JWT_SECRET, {
+    expiresIn: process.env.JWT_EXPIRES_IN || "7d",
+  });
+};
+
+// @route  POST /api/auth/register
+const registerUser = async (req, res) => {
+  try {
+    const { name, email, password } = req.body;
+
+    if (!name || !email || !password) {
+      return res.status(400).json({ message: "All fields are required" });
+    }
+
+    const userExists = await prisma.user.findUnique({ where: { email } });
+    if (userExists) {
+      return res.status(400).json({ message: "User already exists" });
+    }
+
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(password, salt);
+
+    const user = await prisma.user.create({
+      data: { name, email, password: hashedPassword },
+      select: { id: true, name: true, email: true, role: true },
     });
+
+    res.status(201).json({
+      ...user,
+      token: generateToken(user.id),
+    });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
 };
 
-//@routes POST /api/auth/register
-const registerUser = async (req, res)=>{
-    try {
-        const {name, email, password} = req.body;
-        
-        if (!name || !email || !password){
-            return res.status(400).json({message: "All fields are required"});
-        }
-        const userExists = await User.findOne({email});
-        if (userExists){
-            return res.status(400).json({message: "User already exists"});
-        }
+// @route  POST /api/auth/login
+const loginUser = async (req, res) => {
+  try {
+    const { email, password } = req.body;
 
-        const user = await User.create({name, email , password});
-
-        res.status(201).json({
-            _id: user._id,
-            name: user.name,
-            email: user.email,
-            role: user.role,
-            token: generateToken(user._id),
-        });
-
-    } catch (error) {
-        res.status(500).json({message: error.message});
+    if (!email || !password) {
+      return res.status(400).json({ message: "Email and password required" });
     }
-};
 
-// @route POST /api/auth/login
-const loginUser = async (req,res)=>{
-    try {
-        const {email, password} = req.body;
+    const user = await prisma.user.findUnique({ where: { email } });
 
-        if(!email || !password){
-            return res.status(400).json({message: "Email and password required"});
-        }
-
-        const user = await User.findOne({email}).select("+password");
-
-        if(!user || !await user.matchPassword(password)){
-            return res.status(401).json({message:"Invalid email or password"});
-        }
-
-        res.json({
-            _id:user._id,
-            name: user.name,
-            email: user.email,
-            role: user.role,
-            token: generateToken(user._id),
-        });
-    } catch (error) {
-        res.status(500).json({message: error.message });
+    if (!user || !(await bcrypt.compare(password, user.password))) {
+      return res.status(401).json({ message: "Invalid email or password" });
     }
+
+    res.json({
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      token: generateToken(user.id),
+    });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
 };
 
-// @route GET /api/auth/me
-
-const getMe = async (req, res) =>{
-    res.json(req.user);
+// @route  GET /api/auth/me
+const getMe = async (req, res) => {
+  res.json(req.user);
 };
 
-module.exports = {registerUser, loginUser, getMe};
+module.exports = { registerUser, loginUser, getMe };

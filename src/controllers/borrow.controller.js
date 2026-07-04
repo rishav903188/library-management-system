@@ -1,57 +1,53 @@
-const Borrow = require("../models/borrow.model");
-const Book = require("../models/book.model");
-const Reservation = require("../models/reservation.model");
+const prisma = require("../config/prisma");
 const { createFineIfLate } = require("../services/fine.service");
 const { fulfillNextReservation } = require("../services/reservation.service");
-const { sendFineNoticeEmail } = require("../services/email.service");
+const { sendReturnConfirmationEmail, sendFineNoticeEmail } = require("../services/email.service");
 
 const DEFAULT_BORROW_DAYS = 14;
 
 // @route  POST /api/borrow/:bookId
 const borrowBook = async (req, res) => {
   try {
-    const book = await Book.findById(req.params.bookId);
+    const book = await prisma.book.findUnique({ where: { id: req.params.bookId } });
     if (!book) return res.status(404).json({ message: "Book not found" });
 
-    const myReservation = await Reservation.findOne({
-      user: req.user._id,
-      book: book._id,
-      status: "notified",
+    const myReservation = await prisma.reservation.findFirst({
+      where: { userId: req.user.id, bookId: book.id, status: "notified" },
     });
 
     if (!myReservation && book.availableCopies < 1) {
       return res.status(400).json({
-        message:
-          "No copies available right now. You can reserve this book instead.",
+        message: "No copies available. You can reserve this book instead.",
       });
     }
-    const alreadyBorrowed = await Borrow.findOne({
-      user: req.user._id,
-      book: book._id,
-      status: "borrowed",
+
+    const alreadyBorrowed = await prisma.borrow.findFirst({
+      where: { userId: req.user.id, bookId: book.id, status: "borrowed" },
     });
     if (alreadyBorrowed) {
-      return res
-        .status(400)
-        .json({ message: "You already have this book borrowed" });
+      return res.status(400).json({ message: "You already have this book borrowed" });
     }
 
     const dueDate = new Date();
     dueDate.setDate(dueDate.getDate() + DEFAULT_BORROW_DAYS);
 
-    const borrow = await Borrow.create({
-      user: req.user._id,
-      book: book._id,
-      dueDate,
+    const borrow = await prisma.borrow.create({
+      data: { userId: req.user.id, bookId: book.id, dueDate },
     });
 
     if (myReservation) {
-      myReservation.status = "fulfilled";
-      await myReservation.save();
+      // Copy pehle se hold thi — availableCopies mat ghatao, sirf reservation fulfill karo
+      await prisma.reservation.update({
+        where: { id: myReservation.id },
+        data: { status: "fulfilled" },
+      });
     } else {
-      book.availableCopies -= 1;
-      await book.save();
+      await prisma.book.update({
+        where: { id: book.id },
+        data: { availableCopies: { decrement: 1 } },
+      });
     }
+
     res.status(201).json(borrow);
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -61,11 +57,10 @@ const borrowBook = async (req, res) => {
 // @route  PUT /api/borrow/return/:borrowId
 const returnBook = async (req, res) => {
   try {
-    const borrow = await Borrow.findById(req.params.borrowId);
-    if (!borrow)
-      return res.status(404).json({ message: "Borrow record not found" });
+    const borrow = await prisma.borrow.findUnique({ where: { id: req.params.borrowId } });
+    if (!borrow) return res.status(404).json({ message: "Borrow record not found" });
 
-    if (borrow.user.toString() !== req.user._id.toString()) {
+    if (borrow.userId !== req.user.id) {
       return res.status(403).json({ message: "Not your borrow record" });
     }
 
@@ -73,31 +68,38 @@ const returnBook = async (req, res) => {
       return res.status(400).json({ message: "Book already returned" });
     }
 
-    borrow.status = "returned";
-    borrow.returnDate = new Date();
-    await borrow.save();
+    const returnDate = new Date();
 
-    const book = await Book.findById(borrow.book);
-    if (book) {
-      book.availableCopies += 1;
-      await book.save();
-    }
+    const updatedBorrow = await prisma.borrow.update({
+      where: { id: borrow.id },
+      data: { status: "returned", returnDate },
+    });
 
-    const fine = await createFineIfLate(borrow);
+    // Copy wapas pool me
+    await prisma.book.update({
+      where: { id: borrow.bookId },
+      data: { availableCopies: { increment: 1 } },
+    });
 
-    const notified = await fulfillNextReservation(borrow.book);
-    const user = await UserActivation.findById(borrow.user);
+    // Fine check
+    const fine = await createFineIfLate({ ...borrow, returnDate });
 
-    if(user && book){
+    // Next reservation notify
+    const notified = await fulfillNextReservation(borrow.bookId);
+
+    // Emails
+    const user = await prisma.user.findUnique({ where: { id: borrow.userId } });
+    const book = await prisma.book.findUnique({ where: { id: borrow.bookId } });
+
+    if (user && book) {
       await sendReturnConfirmationEmail(user, book);
-
-      if(fine){
-        await sendFineNoticeEmail(user, book , fine);
-      }
+      if (fine) await sendFineNoticeEmail(user, book, fine);
     }
+
     res.json({
-      borrow,
+      borrow: updatedBorrow,
       fine: fine || null,
+      nextInQueueNotified: notified ? notified.userId : null,
       message: fine
         ? `Book returned late by ${fine.daysLate} day(s). Fine of ₹${fine.amount} added.`
         : "Book returned on time. No fine.",
@@ -110,9 +112,13 @@ const returnBook = async (req, res) => {
 // @route  GET /api/borrow/my
 const getMyBorrows = async (req, res) => {
   try {
-    const borrows = await Borrow.find({ user: req.user._id })
-      .populate("book", "title author isbn")
-      .sort({ createdAt: -1 });
+    const borrows = await prisma.borrow.findMany({
+      where: { userId: req.user.id },
+      include: {
+        book: { select: { title: true, author: true, isbn: true } },
+      },
+      orderBy: { createdAt: "desc" },
+    });
     res.json(borrows);
   } catch (err) {
     res.status(500).json({ message: err.message });

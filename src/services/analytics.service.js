@@ -1,33 +1,23 @@
-const Book = require("../models/book.model");
-const User = require("../models/user.model");
-const Borrow = require("../models/borrow.model");
-const Fine = require("../models/fine.model");
-const Reservation = require("../models/reservation.model");
+const prisma = require("../config/prisma");
 
 const getOverview = async () => {
-  const [totalBooks, totalUsers, activeBorrows, waitingReservations] = await Promise.all([
-    Book.countDocuments(),
-    User.countDocuments(),
-    Borrow.countDocuments({ status: "borrowed" }),
-    Reservation.countDocuments({ status: "waiting" }),
-  ]);
+  // Promise.all — sab counts parallel me chalenge, sequential nahi
+  const [totalBooks, totalUsers, activeBorrows, waitingReservations, fineGroups] =
+    await Promise.all([
+      prisma.book.count(),
+      prisma.user.count(),
+      prisma.borrow.count({ where: { status: "borrowed" } }),
+      prisma.reservation.count({ where: { status: "waiting" } }),
+      prisma.fine.groupBy({
+        by: ["status"],
+        _sum: { amount: true },
+      }),
+    ]);
 
-   // Fine totals — $group se sum nikal rahe hain status ke hisaab se
-  const fineTotals = await Fine.aggregate([
-    {
-      $group: {
-        _id: "$status",
-        totalAmount: { $sum: "$amount" },
-        count: { $sum: 1 },
-      },
-    },
-  ]);
-
-    // fineTotals abhi array hai jaise: [{ _id: "paid", totalAmount: 145, count: 3 }, ...]
-  // ise ek seedhe object me convert kar rahe hain taaki frontend ke liye easy ho
   const finesByStatus = { paid: 0, unpaid: 0, waived: 0 };
-  fineTotals.forEach((entry) => {
-    finesByStatus[entry._id] = entry.totalAmount;
+  fineGroups.forEach((g) => {
+    finesByStatus[g.status] = Number(g._sum.amount) || 0;
+    // Number() kyun? Prisma Decimal type return karta hai — plain number chahiye
   });
 
   return {
@@ -41,58 +31,44 @@ const getOverview = async () => {
   };
 };
 
-/**
- * Sabse zyada borrow hone wali books — top N (default 5).
- * Aggregation: Borrow collection ko book ke hisaab se group karke count nikalo,
- * fir Book collection se title/author join (lookup) karo.
- */
 const getMostBorrowedBooks = async (limit = 5) => {
-  const result = await Borrow.aggregate([
-    {
-      $group: {
-        _id: "$book",
-        borrowCount: { $sum: 1 },
-      },
-    },
-    { $sort: { borrowCount: -1 } },
-    { $limit: limit },
-    {
-      $lookup: {
-        from: "books",
-        foreignField: "_id",
-        as: "bookDetails",
-      },
-    },
-    { $unwind: "$bookDetails" },
-    {
-      $project: {
-        _id: 0,
-        bookId: "$bookDetails._id",
-        title: "$bookDetails.title",
-        author: "$bookDetails.author",
-        borrowCount: 1,
-      },
-    },
-  ]);
+  // Prisma ka groupBy — MongoDB ke $group jaisa
+  const grouped = await prisma.borrow.groupBy({
+    by: ["bookId"],
+    _count: { id: true },
+    orderBy: { _count: { id: "desc" } },
+    take: limit,
+  });
 
-  return result;
+  // groupBy se sirf bookId aur count milta hai — book details alag fetch karni padegi
+  const bookIds = grouped.map((g) => g.bookId);
+  const books = await prisma.book.findMany({
+    where: { id: { in: bookIds } },
+    select: { id: true, title: true, author: true, genre: true },
+  });
+
+  // Dono ko combine karo
+  return grouped.map((g) => ({
+    ...books.find((b) => b.id === g.bookId),
+    borrowCount: g._count.id,
+  }));
 };
 
-
-/**
- * Abhi jo books overdue hain (due date nikal gayi, abhi tak return nahi hui).
- */
 const getOverdueBorrows = async () => {
-  const overdue = await Borrow.find({
-    status: "borrowed",
-    dueDate: { $lt: new Date() },
-  })
-    .populate("user", "name email")
-    .populate("book", "title author")
-    .sort({ dueDate: 1 }); // sabse zyada late pehle
+  const overdue = await prisma.borrow.findMany({
+    where: {
+      status: "borrowed",
+      dueDate: { lt: new Date() },
+    },
+    include: {
+      user: { select: { name: true, email: true } },
+      book: { select: { title: true, author: true } },
+    },
+    orderBy: { dueDate: "asc" },
+  });
 
   return overdue.map((b) => ({
-    borrowId: b._id,
+    borrowId: b.id,
     user: b.user,
     book: b.book,
     dueDate: b.dueDate,

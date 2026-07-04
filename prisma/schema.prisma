@@ -1,0 +1,138 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ENUMS — schema.sql ke ENUMs ka mirror
+
+enum UserRole {
+  student
+  librarian
+  admin
+}
+
+enum BorrowStatus {
+  borrowed
+  returned
+}
+
+enum FineStatus {
+  unpaid
+  paid
+  waived
+}
+
+enum ReservationStatus {
+  waiting
+  notified
+  fulfilled
+  cancelled
+}
+
+// MODELS
+
+model User {
+  id        String   @id @default(uuid())
+  name      String   @db.VarChar(100)
+  email     String   @unique @db.VarChar(150)
+  password  String
+  role      UserRole @default(student)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations — Prisma ko pata rehta hai ki User ke kaun se records dusri tables me hain
+  borrows      Borrow[]
+  fines        Fine[]
+  reservations Reservation[]
+
+  @@map("users")  // PostgreSQL table name "users" — Prisma model ka naam "User" (singular PascalCase)
+}
+
+model Book {
+  id              String  @id @default(uuid())
+  title           String  @db.VarChar(255)
+  author          String  @db.VarChar(150)
+  isbn            String  @unique @db.VarChar(20)
+  genre           String  @default("General") @db.VarChar(100)
+  totalCopies     Int     @default(1) @map("total_copies")
+  availableCopies Int     @default(1) @map("available_copies")
+  coverImage      String? @map("cover_image")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  borrows      Borrow[]
+  fines        Fine[]
+  reservations Reservation[]
+
+  @@map("books")
+}
+
+model Borrow {
+  id         String       @id @default(uuid())
+  userId     String       @map("user_id")
+  bookId     String       @map("book_id")
+  borrowDate DateTime     @default(now()) @map("borrow_date")
+  dueDate    DateTime     @map("due_date")
+  returnDate DateTime?    @map("return_date")
+  status     BorrowStatus @default(borrowed)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Foreign keys
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  book Book @relation(fields: [bookId], references: [id], onDelete: Cascade)
+
+  // Ek borrow ka sirf ek fine ho sakta hai
+  fine Fine?
+
+  @@index([userId])
+  @@index([bookId])
+  @@index([status])
+  @@map("borrows")
+}
+
+model Fine {
+  id       String     @id @default(uuid())
+  userId   String     @map("user_id")
+  borrowId String     @unique @map("borrow_id")  // unique: ek borrow = ek hi fine
+  bookId   String     @map("book_id")
+  daysLate Int        @map("days_late")
+  amount   Decimal    @db.Decimal(10, 2)
+  status   FineStatus @default(unpaid)
+  paidAt   DateTime?  @map("paid_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  borrow Borrow @relation(fields: [borrowId], references: [id], onDelete: Cascade)
+  book   Book   @relation(fields: [bookId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([status])
+  @@map("fines")
+}
+
+model Reservation {
+  id         String            @id @default(uuid())
+  userId     String            @map("user_id")
+  bookId     String            @map("book_id")
+  status     ReservationStatus @default(waiting)
+  notifiedAt DateTime?         @map("notified_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  book Book @relation(fields: [bookId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([bookId, status])
+  @@map("reservations")
+}

@@ -1,166 +1,126 @@
-const Book = require("../models/book.model");
-const Borrow = require("../models/borrow.model");
+const prisma = require("../config/prisma");
 
-/**
- * User ne ab tak kin genres ki books padhi hain, wo nikalta hai.
- */
 const getUserGenres = async (userId) => {
-  const borrows = await Borrow.find({ user: userId }).populate("book", "genre");
-
-  const genres = borrows
-    .map((b) => b.book?.genre)
-    .filter(Boolean); // null/undefined hata do
-
-  return [...new Set(genres)]; // duplicate genres hata do
+  const borrows = await prisma.borrow.findMany({
+    where: { userId },
+    include: { book: { select: { genre: true } } },
+  });
+  const genres = borrows.map((b) => b.book?.genre).filter(Boolean);
+  return [...new Set(genres)];
 };
 
-/**
- * User ne already kaunsi books borrow ki hain (recommendation me dobara mat dikhao).
- */
 const getUserBorrowedBookIds = async (userId) => {
-  const borrows = await Borrow.find({ user: userId }).select("book");
-  return borrows.map((b) => b.book.toString());
+  const borrows = await prisma.borrow.findMany({
+    where: { userId },
+    select: { bookId: true },
+  });
+  return borrows.map((b) => b.bookId);
 };
 
-/**
- * Personalized recommendations:
- * 1. User ke padhe hue genres nikalo
- * 2. Un genres ki baaki books dhoondo (jo usne abhi tak nahi padhi)
- * 3. Popularity (borrowCount) ke hisaab se rank karo
- * 4. Agar user ki koi history hi nahi hai (naya user), to overall most-borrowed books dikhao (fallback)
- */
+const getMostPopularBooks = async (limit = 5, excludeIds = []) => {
+  const grouped = await prisma.borrow.groupBy({
+    by: ["bookId"],
+    _count: { id: true },
+    orderBy: { _count: { id: "desc" } },
+    take: limit + excludeIds.length,
+  });
+
+  const bookIds = grouped
+    .map((g) => g.bookId)
+    .filter((id) => !excludeIds.includes(id));
+
+  const books = await prisma.book.findMany({
+    where: { id: { in: bookIds.slice(0, limit) } },
+    select: { id: true, title: true, author: true, genre: true },
+  });
+
+  return books.map((b) => ({
+    ...b,
+    borrowCount: grouped.find((g) => g.bookId === b.id)?._count.id || 0,
+  }));
+};
+
 const getRecommendationsForUser = async (userId, limit = 5) => {
   const genres = await getUserGenres(userId);
   const alreadyBorrowedIds = await getUserBorrowedBookIds(userId);
 
-  // Naya user — koi history nahi — fallback: sabse popular books dikhao
   if (genres.length === 0) {
     return getMostPopularBooks(limit, alreadyBorrowedIds);
   }
 
-  const recommendations = await Borrow.aggregate([
-    // sirf un books ke borrow records jo target genres me hain
-    {
-      $lookup: {
-        from: "books",
-        localField: "book",
-        foreignField: "_id",
-        as: "bookDetails",
-      },
-    },
-    { $unwind: "$bookDetails" },
-    { $match: { "bookDetails.genre": { $in: genres } } },
-    {
-      $group: {
-        _id: "$bookDetails._id",
-        title: { $first: "$bookDetails.title" },
-        author: { $first: "$bookDetails.author" },
-        genre: { $first: "$bookDetails.genre" },
-        borrowCount: { $sum: 1 },
-      },
-    },
-    { $sort: { borrowCount: -1 } },
-    { $limit: limit + alreadyBorrowedIds.length }, // thoda extra le lo, filter ke baad kam ho sakte hain
-  ]);
+  // Same genre ki books jo user ne nahi padhi, popularity se sort
+  const grouped = await prisma.borrow.groupBy({
+    by: ["bookId"],
+    _count: { id: true },
+    orderBy: { _count: { id: "desc" } },
+    take: limit + alreadyBorrowedIds.length + 10,
+  });
 
-  // user ki already-padhi books ko result se hata do
-  const filtered = recommendations.filter(
-    (r) => !alreadyBorrowedIds.includes(r._id.toString())
-  );
+  const bookIds = grouped
+    .map((g) => g.bookId)
+    .filter((id) => !alreadyBorrowedIds.includes(id));
 
-  return filtered.slice(0, limit);
+  // Un books me se sirf wahi jo user ke genres me hain
+  const books = await prisma.book.findMany({
+    where: {
+      id: { in: bookIds },
+      genre: { in: genres },
+    },
+    select: { id: true, title: true, author: true, genre: true },
+    take: limit,
+  });
+
+  return books.map((b) => ({
+    ...b,
+    borrowCount: grouped.find((g) => g.bookId === b.id)?._count.id || 0,
+  }));
 };
 
-/**
- * Fallback jab user ki koi borrow history nahi hai — overall popular books.
- */
-const getMostPopularBooks = async (limit = 5, excludeIds = []) => {
-  const result = await Borrow.aggregate([
-    {
-      $group: {
-        _id: "$book",
-        borrowCount: { $sum: 1 },
-      },
-    },
-    { $sort: { borrowCount: -1 } },
-    { $limit: limit + excludeIds.length },
-    {
-      $lookup: {
-        from: "books",
-        localField: "_id",
-        foreignField: "_id",
-        as: "bookDetails",
-      },
-    },
-    { $unwind: "$bookDetails" },
-    {
-      $project: {
-        _id: 1,
-        title: "$bookDetails.title",
-        author: "$bookDetails.author",
-        genre: "$bookDetails.genre",
-        borrowCount: 1,
-      },
-    },
-  ]);
-
-  const filtered = result.filter((r) => !excludeIds.includes(r._id.toString()));
-  return filtered.slice(0, limit);
-};
-
-/**
- * "Similar books" — kisi ek specific book ke same genre ki baaki books, popularity se sorted.
- * Book detail page pe "Customers also borrowed" jaisa section ke liye useful.
- */
 const getSimilarBooks = async (bookId, limit = 5) => {
-  const book = await Book.findById(bookId);
+  const book = await prisma.book.findUnique({ where: { id: bookId } });
   if (!book) {
     const error = new Error("Book not found");
     error.statusCode = 404;
     throw error;
   }
 
-  const similar = await Borrow.aggregate([
-    {
-      $lookup: {
-        from: "books",
-        localField: "book",
-        foreignField: "_id",
-        as: "bookDetails",
-      },
-    },
-    { $unwind: "$bookDetails" },
-    {
-      $match: {
-        "bookDetails.genre": book.genre,
-        "bookDetails._id": { $ne: book._id }, // khud ko exclude karo
-      },
-    },
-    {
-      $group: {
-        _id: "$bookDetails._id",
-        title: { $first: "$bookDetails.title" },
-        author: { $first: "$bookDetails.author" },
-        borrowCount: { $sum: 1 },
-      },
-    },
-    { $sort: { borrowCount: -1 } },
-    { $limit: limit },
-  ]);
+  const grouped = await prisma.borrow.groupBy({
+    by: ["bookId"],
+    _count: { id: true },
+    orderBy: { _count: { id: "desc" } },
+    take: limit + 1,
+  });
 
-  // Agar same genre me koi aur borrow hi nahi hui hai, to seedha catalog se uthao (no popularity data)
-  if (similar.length === 0) {
-    const fallback = await Book.find({
+  const candidateIds = grouped
+    .map((g) => g.bookId)
+    .filter((id) => id !== bookId);
+
+  const similar = await prisma.book.findMany({
+    where: {
+      id: { in: candidateIds },
       genre: book.genre,
-      _id: { $ne: book._id },
-    })
-      .limit(limit)
-      .select("title author genre");
+    },
+    select: { id: true, title: true, author: true, genre: true },
+    take: limit,
+  });
 
-    return fallback;
+  // Fallback: agar koi borrow data nahi, seedha catalog se
+  if (similar.length === 0) {
+    return prisma.book.findMany({
+      where: { genre: book.genre, id: { not: bookId } },
+      select: { id: true, title: true, author: true, genre: true },
+      take: limit,
+    });
   }
 
-  return similar;
+  return similar.map((b) => ({
+    ...b,
+    borrowCount: grouped.find((g) => g.bookId === b.id)?._count.id || 0,
+  }));
 };
 
-module.exports = { getRecommendationsForUser, getSimilarBooks, getMostPopularBooks };
+module.exports = {
+  getRecommendationsForUser,
+  getSimilarBooks,
+  getMostPopularBooks,
+};

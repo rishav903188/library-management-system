@@ -1,31 +1,36 @@
 const fs = require("fs");
 const path = require("path");
-const Book = require("../models/book.model");
+const prisma = require("../config/prisma");
 
 // @route  POST /api/books
-// Create book. If cover image is sent, store its path.
 const createBook = async (req, res) => {
   try {
     const { title, author, isbn, genre, totalCopies } = req.body;
 
     if (!title || !author || !isbn) {
-      return res
-        .status(400)
-        .json({ message: "Title, author and ISBN are required" });
+      return res.status(400).json({ message: "Title, author and ISBN are required" });
     }
 
-    const book = await Book.create({
-      title,
-      author,
-      isbn,
-      genre,
-      totalCopies: totalCopies || 1,
-      availableCopies: totalCopies || 1,
-      coverImage: req.file ? `/uploads/books/${req.file.filename}` : null,
+    const copies = Number(totalCopies) || 1;
+
+    const book = await prisma.book.create({
+      data: {
+        title,
+        author,
+        isbn,
+        genre: genre || "General",
+        totalCopies: copies,
+        availableCopies: copies,
+        coverImage: req.file ? `/uploads/books/${req.file.filename}` : null,
+      },
     });
 
     res.status(201).json(book);
   } catch (err) {
+    // Prisma unique constraint error
+    if (err.code === "P2002") {
+      return res.status(400).json({ message: "ISBN already exists" });
+    }
     res.status(500).json({ message: err.message });
   }
 };
@@ -33,7 +38,9 @@ const createBook = async (req, res) => {
 // @route  GET /api/books
 const getBooks = async (req, res) => {
   try {
-    const books = await Book.find().sort({ createdAt: -1 });
+    const books = await prisma.book.findMany({
+      orderBy: { createdAt: "desc" },
+    });
     res.json(books);
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -43,7 +50,9 @@ const getBooks = async (req, res) => {
 // @route  GET /api/books/:id
 const getBookById = async (req, res) => {
   try {
-    const book = await Book.findById(req.params.id);
+    const book = await prisma.book.findUnique({
+      where: { id: req.params.id },
+    });
     if (!book) return res.status(404).json({ message: "Book not found" });
     res.json(book);
   } catch (err) {
@@ -54,36 +63,48 @@ const getBookById = async (req, res) => {
 // @route  PUT /api/books/:id
 const updateBook = async (req, res) => {
   try {
-    const book = await Book.findById(req.params.id);
+    const book = await prisma.book.findUnique({ where: { id: req.params.id } });
     if (!book) return res.status(404).json({ message: "Book not found" });
 
     const { title, author, isbn, genre, totalCopies } = req.body;
 
+    let newAvailable = book.availableCopies;
+    let newTotal = book.totalCopies;
+
     if (totalCopies !== undefined) {
-      const diff = totalCopies - book.totalCopies;
-      book.totalCopies = totalCopies;
-      book.availableCopies = Math.max(0, book.availableCopies + diff);
+      const diff = Number(totalCopies) - book.totalCopies;
+      newTotal = Number(totalCopies);
+      newAvailable = Math.max(0, book.availableCopies + diff);
     }
 
-    book.title = title ?? book.title;
-    book.author = author ?? book.author;
-    book.isbn = isbn ?? book.isbn;
-    book.genre = genre ?? book.genre;
-
-    // If a new cover is uploaded, delete old one and update path
+    let newCoverImage = book.coverImage;
     if (req.file) {
+      // Purani image delete karo
       if (book.coverImage) {
         const oldPath = path.join(__dirname, "..", book.coverImage);
-        if (fs.existsSync(oldPath)) {
-          fs.unlinkSync(oldPath);
-        }
+        if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
       }
-      book.coverImage = `/uploads/books/${req.file.filename}`;
+      newCoverImage = `/uploads/books/${req.file.filename}`;
     }
 
-    const updatedBook = await book.save();
-    res.json(updatedBook);
+    const updated = await prisma.book.update({
+      where: { id: req.params.id },
+      data: {
+        title: title ?? book.title,
+        author: author ?? book.author,
+        isbn: isbn ?? book.isbn,
+        genre: genre ?? book.genre,
+        totalCopies: newTotal,
+        availableCopies: newAvailable,
+        coverImage: newCoverImage,
+      },
+    });
+
+    res.json(updated);
   } catch (err) {
+    if (err.code === "P2002") {
+      return res.status(400).json({ message: "ISBN already exists" });
+    }
     res.status(500).json({ message: err.message });
   }
 };
@@ -91,17 +112,15 @@ const updateBook = async (req, res) => {
 // @route  DELETE /api/books/:id
 const deleteBook = async (req, res) => {
   try {
-    const book = await Book.findById(req.params.id);
+    const book = await prisma.book.findUnique({ where: { id: req.params.id } });
     if (!book) return res.status(404).json({ message: "Book not found" });
 
     if (book.coverImage) {
       const filePath = path.join(__dirname, "..", book.coverImage);
-      if (fs.existsSync(filePath)) {
-        fs.unlinkSync(filePath);
-      }
+      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
     }
 
-    await book.deleteOne();
+    await prisma.book.delete({ where: { id: req.params.id } });
     res.json({ message: "Book removed" });
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -111,37 +130,25 @@ const deleteBook = async (req, res) => {
 // @route  POST /api/books/:id/cover
 const uploadBookCover = async (req, res) => {
   try {
-    const book = await Book.findById(req.params.id);
+    const book = await prisma.book.findUnique({ where: { id: req.params.id } });
     if (!book) return res.status(404).json({ message: "Book not found" });
 
-    if (!req.file) {
-      return res.status(400).json({ message: "No file uploaded" });
-    }
+    if (!req.file) return res.status(400).json({ message: "No file uploaded" });
 
     if (book.coverImage) {
       const oldPath = path.join(__dirname, "..", book.coverImage);
-      if (fs.existsSync(oldPath)) {
-        fs.unlinkSync(oldPath);
-      }
+      if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
     }
 
-    book.coverImage = `/uploads/books/${req.file.filename}`;
-    await book.save();
-
-    res.json({
-      message: "Cover image uploaded successfully",
-      book,
+    const updated = await prisma.book.update({
+      where: { id: req.params.id },
+      data: { coverImage: `/uploads/books/${req.file.filename}` },
     });
+
+    res.json({ message: "Cover image uploaded successfully", book: updated });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 };
 
-module.exports = {
-  createBook,
-  getBooks,
-  getBookById,
-  updateBook,
-  deleteBook,
-  uploadBookCover,
-};
+module.exports = { createBook, getBooks, getBookById, updateBook, deleteBook, uploadBookCover };
