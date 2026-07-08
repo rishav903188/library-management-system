@@ -1,8 +1,7 @@
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcryptjs");
 const prisma = require("../config/prisma");
-
-
+const { auditLog } = require("../services/audit.service");
 
 const generateToken = (id) => {
   return jwt.sign({ id }, process.env.JWT_SECRET, {
@@ -32,10 +31,16 @@ const registerUser = async (req, res) => {
       select: { id: true, name: true, email: true, role: true },
     });
 
-    res.status(201).json({
-      ...user,
-      token: generateToken(user.id),
+    await auditLog({
+      userId: user.id,
+      action: "USER_REGISTERED",
+      entity: "user",
+      entityId: user.id,
+      metadata: { email: user.email, name: user.name },
+      req,
     });
+
+    res.status(201).json({ ...user, token: generateToken(user.id) });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
@@ -55,6 +60,15 @@ const loginUser = async (req, res) => {
     if (!user || !(await bcrypt.compare(password, user.password))) {
       return res.status(401).json({ message: "Invalid email or password" });
     }
+
+    await auditLog({
+      userId: user.id,
+      action: "USER_LOGIN",
+      entity: "user",
+      entityId: user.id,
+      metadata: { email: user.email },
+      req,
+    });
 
     res.json({
       id: user.id,

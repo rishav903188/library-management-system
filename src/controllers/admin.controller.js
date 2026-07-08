@@ -3,7 +3,7 @@ const {
   getMostBorrowedBooks,
   getOverdueBorrows,
 } = require("../services/analytics.service");
-
+const prisma = require("../config/prisma");
 // @route  GET /api/admin/analytics/overview
 const overview = async (req, res) => {
   try {
@@ -34,5 +34,32 @@ const overdue = async (req, res) => {
     res.status(500).json({ message: err.message });
   }
 };
+const getAuditLogs = async (req, res) => {
+  try {
+    const { action, userId, from, to, limit = 50 } = req.query;
 
-module.exports = { overview, mostBorrowed, overdue };
+    const where = {};
+    if (action)  where.action   = action;
+    if (userId)  where.userId   = userId;
+    if (from || to) {
+      where.createdAt = {};
+      if (from) where.createdAt.gte = new Date(from);
+      if (to)   where.createdAt.lte = new Date(to);
+    }
+
+    const logs = await prisma.auditLog.findMany({
+      where,
+      include: {
+        user: { select: { name: true, email: true } },
+      },
+      orderBy: { createdAt: "desc" },
+      take: Number(limit),
+    });
+
+    res.json(logs);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+module.exports = { overview, mostBorrowed, overdue, getAuditLogs };

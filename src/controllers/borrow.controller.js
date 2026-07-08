@@ -2,10 +2,10 @@ const prisma = require("../config/prisma");
 const { createFineIfLate } = require("../services/fine.service");
 const { fulfillNextReservation } = require("../services/reservation.service");
 const { sendReturnConfirmationEmail, sendFineNoticeEmail } = require("../services/email.service");
+const { auditLog } = require("../services/audit.service");
 
 const DEFAULT_BORROW_DAYS = 14;
 
-// @route  POST /api/borrow/:bookId
 const borrowBook = async (req, res) => {
   try {
     const book = await prisma.book.findUnique({ where: { id: req.params.bookId } });
@@ -36,7 +36,6 @@ const borrowBook = async (req, res) => {
     });
 
     if (myReservation) {
-      // Copy pehle se hold thi — availableCopies mat ghatao, sirf reservation fulfill karo
       await prisma.reservation.update({
         where: { id: myReservation.id },
         data: { status: "fulfilled" },
@@ -48,13 +47,21 @@ const borrowBook = async (req, res) => {
       });
     }
 
+    await auditLog({
+      userId: req.user.id,
+      action: "BOOK_BORROWED",
+      entity: "borrow",
+      entityId: borrow.id,
+      metadata: { bookTitle: book.title, bookId: book.id, dueDate },
+      req,
+    });
+
     res.status(201).json(borrow);
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 };
 
-// @route  PUT /api/borrow/return/:borrowId
 const returnBook = async (req, res) => {
   try {
     const borrow = await prisma.borrow.findUnique({ where: { id: req.params.borrowId } });
@@ -69,25 +76,19 @@ const returnBook = async (req, res) => {
     }
 
     const returnDate = new Date();
-
     const updatedBorrow = await prisma.borrow.update({
       where: { id: borrow.id },
       data: { status: "returned", returnDate },
     });
 
-    // Copy wapas pool me
     await prisma.book.update({
       where: { id: borrow.bookId },
       data: { availableCopies: { increment: 1 } },
     });
 
-    // Fine check
     const fine = await createFineIfLate({ ...borrow, returnDate });
-
-    // Next reservation notify
     const notified = await fulfillNextReservation(borrow.bookId);
 
-    // Emails
     const user = await prisma.user.findUnique({ where: { id: borrow.userId } });
     const book = await prisma.book.findUnique({ where: { id: borrow.bookId } });
 
@@ -95,6 +96,20 @@ const returnBook = async (req, res) => {
       await sendReturnConfirmationEmail(user, book);
       if (fine) await sendFineNoticeEmail(user, book, fine);
     }
+
+    await auditLog({
+      userId: req.user.id,
+      action: "BOOK_RETURNED",
+      entity: "borrow",
+      entityId: borrow.id,
+      metadata: {
+        bookTitle: book?.title,
+        bookId: borrow.bookId,
+        fineAmount: fine?.amount ?? null,
+        daysLate: fine?.daysLate ?? 0,
+      },
+      req,
+    });
 
     res.json({
       borrow: updatedBorrow,
@@ -109,14 +124,11 @@ const returnBook = async (req, res) => {
   }
 };
 
-// @route  GET /api/borrow/my
 const getMyBorrows = async (req, res) => {
   try {
     const borrows = await prisma.borrow.findMany({
       where: { userId: req.user.id },
-      include: {
-        book: { select: { title: true, author: true, isbn: true } },
-      },
+      include: { book: { select: { title: true, author: true, isbn: true } } },
       orderBy: { createdAt: "desc" },
     });
     res.json(borrows);

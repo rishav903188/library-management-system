@@ -3,7 +3,7 @@ const { overview, mostBorrowed, overdue } = require("../controllers/admin.contro
 const { getAllUsers, updateUserRole } = require("../controllers/user.controller");
 const { protect } = require("../middlewares/auth.middleware");
 const { authorize } = require("../middlewares/rbac.middleware");
-
+const { overview, mostBorrowed, overdue, getAuditLogs } = require("../controllers/admin.controller");
 const router = express.Router();
 
 /**
@@ -132,5 +132,36 @@ router.get("/users", protect, authorize("admin", "librarian"), getAllUsers);
  *         description: User not found
  */
 router.put("/users/:id/role", protect, authorize("admin"), updateUserRole);
+/**
+ * @openapi
+ * /api/admin/audit-logs:
+ *   get:
+ *     tags: [Admin]
+ *     summary: View audit logs (admin only)
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: action
+ *         schema: { type: string, example: BOOK_BORROWED }
+ *       - in: query
+ *         name: userId
+ *         schema: { type: string, format: uuid }
+ *       - in: query
+ *         name: from
+ *         schema: { type: string, format: date, example: "2026-01-01" }
+ *       - in: query
+ *         name: to
+ *         schema: { type: string, format: date, example: "2026-12-31" }
+ *       - in: query
+ *         name: limit
+ *         schema: { type: integer, default: 50 }
+ *     responses:
+ *       200:
+ *         description: Filtered audit logs
+ *       403:
+ *         description: Admin only
+ */
+router.get("/audit-logs", protect, authorize("admin"), getAuditLogs);
 
 module.exports = router;

@@ -48,7 +48,7 @@ model User {
   borrows      Borrow[]
   fines        Fine[]
   reservations Reservation[]
-
+  auditLogs    AuditLog[]
   @@map("users")  // PostgreSQL table name "users" — Prisma model ka naam "User" (singular PascalCase)
 }
 
@@ -135,4 +135,38 @@ model Reservation {
   @@index([userId])
   @@index([bookId, status])
   @@map("reservations")
+}
+model AuditLog {
+  id        String   @id @default(uuid())
+  userId    String?  @map("user_id")
+  // nullable hai — kyunki:
+  // 1. System-generated events me user nahi hota
+  // 2. Agar user delete ho jaye, purane logs delete nahi hone chahiye (ON DELETE SET NULL)
+
+  action    String   @db.VarChar(100)
+  // e.g., "BOOK_BORROWED", "USER_ROLE_CHANGED"
+
+  entity    String?  @db.VarChar(50)
+  // kaunsa resource affected hua — "borrow", "fine", "book", "user"
+
+  entityId  String?  @map("entity_id")
+  // affected resource ka ID
+
+  metadata  Json?
+  // JSONB — har action ke liye alag extra data.
+  // e.g., BOOK_BORROWED me: { bookTitle, dueDate }
+  // USER_ROLE_CHANGED me: { oldRole, newRole, targetUserEmail }
+
+  ipAddress String?  @map("ip_address") @db.VarChar(50)
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+  // SetNull kyun Cascade nahi? Agar user delete ho to uske audit logs delete mat karo —
+  // records rehne chahiye (forensic trail). Sirf userId null ho jaye.
+
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+  @@map("audit_logs")
 }

@@ -1,23 +1,18 @@
 const fs = require("fs");
 const path = require("path");
 const prisma = require("../config/prisma");
+const { auditLog } = require("../services/audit.service");
 
-// @route  POST /api/books
 const createBook = async (req, res) => {
   try {
     const { title, author, isbn, genre, totalCopies } = req.body;
-
     if (!title || !author || !isbn) {
       return res.status(400).json({ message: "Title, author and ISBN are required" });
     }
-
     const copies = Number(totalCopies) || 1;
-
     const book = await prisma.book.create({
       data: {
-        title,
-        author,
-        isbn,
+        title, author, isbn,
         genre: genre || "General",
         totalCopies: copies,
         availableCopies: copies,
@@ -25,34 +20,34 @@ const createBook = async (req, res) => {
       },
     });
 
+    await auditLog({
+      userId: req.user.id,
+      action: "BOOK_CREATED",
+      entity: "book",
+      entityId: book.id,
+      metadata: { title: book.title, isbn: book.isbn },
+      req,
+    });
+
     res.status(201).json(book);
   } catch (err) {
-    // Prisma unique constraint error
-    if (err.code === "P2002") {
-      return res.status(400).json({ message: "ISBN already exists" });
-    }
+    if (err.code === "P2002") return res.status(400).json({ message: "ISBN already exists" });
     res.status(500).json({ message: err.message });
   }
 };
 
-// @route  GET /api/books
 const getBooks = async (req, res) => {
   try {
-    const books = await prisma.book.findMany({
-      orderBy: { createdAt: "desc" },
-    });
+    const books = await prisma.book.findMany({ orderBy: { createdAt: "desc" } });
     res.json(books);
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 };
 
-// @route  GET /api/books/:id
 const getBookById = async (req, res) => {
   try {
-    const book = await prisma.book.findUnique({
-      where: { id: req.params.id },
-    });
+    const book = await prisma.book.findUnique({ where: { id: req.params.id } });
     if (!book) return res.status(404).json({ message: "Book not found" });
     res.json(book);
   } catch (err) {
@@ -60,14 +55,12 @@ const getBookById = async (req, res) => {
   }
 };
 
-// @route  PUT /api/books/:id
 const updateBook = async (req, res) => {
   try {
     const book = await prisma.book.findUnique({ where: { id: req.params.id } });
     if (!book) return res.status(404).json({ message: "Book not found" });
 
     const { title, author, isbn, genre, totalCopies } = req.body;
-
     let newAvailable = book.availableCopies;
     let newTotal = book.totalCopies;
 
@@ -79,7 +72,6 @@ const updateBook = async (req, res) => {
 
     let newCoverImage = book.coverImage;
     if (req.file) {
-      // Purani image delete karo
       if (book.coverImage) {
         const oldPath = path.join(__dirname, "..", book.coverImage);
         if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
@@ -100,16 +92,22 @@ const updateBook = async (req, res) => {
       },
     });
 
+    await auditLog({
+      userId: req.user.id,
+      action: "BOOK_UPDATED",
+      entity: "book",
+      entityId: book.id,
+      metadata: { title: updated.title, changes: req.body },
+      req,
+    });
+
     res.json(updated);
   } catch (err) {
-    if (err.code === "P2002") {
-      return res.status(400).json({ message: "ISBN already exists" });
-    }
+    if (err.code === "P2002") return res.status(400).json({ message: "ISBN already exists" });
     res.status(500).json({ message: err.message });
   }
 };
 
-// @route  DELETE /api/books/:id
 const deleteBook = async (req, res) => {
   try {
     const book = await prisma.book.findUnique({ where: { id: req.params.id } });
@@ -121,18 +119,26 @@ const deleteBook = async (req, res) => {
     }
 
     await prisma.book.delete({ where: { id: req.params.id } });
+
+    await auditLog({
+      userId: req.user.id,
+      action: "BOOK_DELETED",
+      entity: "book",
+      entityId: book.id,
+      metadata: { title: book.title, isbn: book.isbn },
+      req,
+    });
+
     res.json({ message: "Book removed" });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 };
 
-// @route  POST /api/books/:id/cover
 const uploadBookCover = async (req, res) => {
   try {
     const book = await prisma.book.findUnique({ where: { id: req.params.id } });
     if (!book) return res.status(404).json({ message: "Book not found" });
-
     if (!req.file) return res.status(400).json({ message: "No file uploaded" });
 
     if (book.coverImage) {

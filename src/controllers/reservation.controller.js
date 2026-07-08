@@ -1,25 +1,32 @@
 const prisma = require("../config/prisma");
 const { createReservation, getQueuePosition } = require("../services/reservation.service");
+const { auditLog } = require("../services/audit.service");
 
-// @route  POST /api/reservations/:bookId
 const reserveBook = async (req, res) => {
   try {
     const reservation = await createReservation(req.user.id, req.params.bookId);
     const position = await getQueuePosition(req.params.bookId, reservation.id);
+
+    await auditLog({
+      userId: req.user.id,
+      action: "RESERVATION_CREATED",
+      entity: "reservation",
+      entityId: reservation.id,
+      metadata: { bookId: req.params.bookId, queuePosition: position },
+      req,
+    });
+
     res.status(201).json({ reservation, queuePosition: position });
   } catch (err) {
     res.status(err.statusCode || 500).json({ message: err.message });
   }
 };
 
-// @route  GET /api/reservations/my
 const getMyReservations = async (req, res) => {
   try {
     const reservations = await prisma.reservation.findMany({
       where: { userId: req.user.id },
-      include: {
-        book: { select: { title: true, author: true, isbn: true } },
-      },
+      include: { book: { select: { title: true, author: true, isbn: true } } },
       orderBy: { createdAt: "desc" },
     });
     res.json(reservations);
@@ -28,7 +35,6 @@ const getMyReservations = async (req, res) => {
   }
 };
 
-// @route  DELETE /api/reservations/:id
 const cancelReservation = async (req, res) => {
   try {
     const reservation = await prisma.reservation.findUnique({
@@ -41,12 +47,9 @@ const cancelReservation = async (req, res) => {
     }
 
     if (["fulfilled", "cancelled"].includes(reservation.status)) {
-      return res
-        .status(400)
-        .json({ message: `Reservation already ${reservation.status}` });
+      return res.status(400).json({ message: `Reservation already ${reservation.status}` });
     }
 
-    // Agar notified tha — copy wapas pool me daalo
     if (reservation.status === "notified") {
       await prisma.book.update({
         where: { id: reservation.bookId },
@@ -57,6 +60,15 @@ const cancelReservation = async (req, res) => {
     const updated = await prisma.reservation.update({
       where: { id: req.params.id },
       data: { status: "cancelled" },
+    });
+
+    await auditLog({
+      userId: req.user.id,
+      action: "RESERVATION_CANCELLED",
+      entity: "reservation",
+      entityId: reservation.id,
+      metadata: { bookId: reservation.bookId, previousStatus: reservation.status },
+      req,
     });
 
     res.json(updated);
