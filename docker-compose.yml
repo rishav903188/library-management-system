@@ -1,52 +1,61 @@
-
 services:
-
   # PostgreSQL Service
-
   postgres:
     image: postgres:15-alpine
     container_name: library_postgres
     restart: unless-stopped
-    
     environment:
       POSTGRES_USER: ${DB_USER}
       POSTGRES_PASSWORD: ${DB_PASSWORD}
       POSTGRES_DB: ${DB_NAME}
-
     ports:
       - "5433:5432"
-    
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    
-
     networks:
       - library_network
-
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
       interval: 10s
       timeout: 5s
       retries: 5
-    
+
+  # Redis Service
+  redis:
+    image: redis:7-alpine
+    container_name: library_redis
+    restart: unless-stopped
+    ports:
+      - "6380:6379"
+    # 6380 host port kyun 6379 nahi? — same reason as PostgreSQL:
+    # agar local Redis chal rahi ho to conflict nahi hoga
+    volumes:
+      - redis_data:/data
+    # /data volume — Redis persistence ke liye (RDB snapshots)
+    networks:
+      - library_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   # App Service
-
   app:
     build:
       context: .
       dockerfile: Dockerfile
     container_name: library_app
     restart: unless-stopped
-
     depends_on:
       postgres:
         condition: service_healthy
-
+      redis:
+        condition: service_healthy
     environment:
       PORT: 8000
       NODE_ENV: production
-      DATABASE_URL: postgresql://${DB_USER}:${DB_PASSWORD}@postgres:${DB_PORT}/${DB_NAME}
+      DATABASE_URL: postgresql://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_NAME}
       JWT_SECRET: ${JWT_SECRET}
       JWT_EXPIRES_IN: ${JWT_EXPIRES_IN}
       EMAIL_HOST: ${EMAIL_HOST}
@@ -55,16 +64,14 @@ services:
       EMAIL_PASS: ${EMAIL_PASS}
       EMAIL_FROM: ${EMAIL_FROM}
       DB_HOST: postgres
-      DB_PORT: ${DB_PORT}
+      DB_PORT: 5432
       DB_USER: ${DB_USER}
-
+      REDIS_URL: redis://redis:6379
     ports:
       - "8000:8000"
-
     volumes:
       - uploads_data:/app/src/uploads
       - reports_data:/app/src/reports
-
     networks:
       - library_network
 
@@ -73,6 +80,7 @@ volumes:
   postgres_data:
   uploads_data:
   reports_data:
+  redis_data:
 
 # Network
 networks:

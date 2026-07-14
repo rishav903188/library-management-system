@@ -1,5 +1,4 @@
 const express = require("express");
-const { overview, mostBorrowed, overdue } = require("../controllers/admin.controller");
 const { getAllUsers, updateUserRole } = require("../controllers/user.controller");
 const { protect } = require("../middlewares/auth.middleware");
 const { authorize } = require("../middlewares/rbac.middleware");
