@@ -1,8 +1,12 @@
+// src/controllers/borrow.controller.js
+// sirf 2 jagah changes hain — baaki sab same
+
 const prisma = require("../config/prisma");
 const { createFineIfLate } = require("../services/fine.service");
 const { fulfillNextReservation } = require("../services/reservation.service");
 const { sendReturnConfirmationEmail, sendFineNoticeEmail } = require("../services/email.service");
 const { auditLog } = require("../services/audit.service");
+const { cacheDel, cacheClear, CACHE_KEYS } = require("../utils/cache"); // ADD THIS
 
 const DEFAULT_BORROW_DAYS = 14;
 
@@ -46,6 +50,10 @@ const borrowBook = async (req, res) => {
         data: { availableCopies: { decrement: 1 } },
       });
     }
+
+    // availableCopies change hua — book cache stale ho gayi — INVALIDATE
+    await cacheDel(CACHE_KEYS.bookDetail(book.id));
+    await cacheClear("books:*");
 
     await auditLog({
       userId: req.user.id,
@@ -96,6 +104,10 @@ const returnBook = async (req, res) => {
       await sendReturnConfirmationEmail(user, book);
       if (fine) await sendFineNoticeEmail(user, book, fine);
     }
+
+    // availableCopies change hua — INVALIDATE
+    await cacheDel(CACHE_KEYS.bookDetail(borrow.bookId));
+    await cacheClear("books:*");
 
     await auditLog({
       userId: req.user.id,

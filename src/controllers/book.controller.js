@@ -1,14 +1,68 @@
+// src/controllers/book.controller.js
 const fs = require("fs");
 const path = require("path");
 const prisma = require("../config/prisma");
 const { auditLog } = require("../services/audit.service");
+const { cacheGet, cacheSet, cacheDel, cacheClear, CACHE_KEYS, TTL } = require("../utils/cache");
 
+// @route  GET /api/books
+const getBooks = async (req, res) => {
+  try {
+    const cacheKey = CACHE_KEYS.booksList();
+
+    // Step 1: Cache check karo
+    const cached = await cacheGet(cacheKey);
+    if (cached) {
+      return res.json(cached); // Cache HIT — DB hit nahi hua
+    }
+
+    // Step 2: Cache MISS — DB se fetch karo
+    const books = await prisma.book.findMany({
+      orderBy: { createdAt: "desc" },
+    });
+
+    // Step 3: Result cache me store karo future requests ke liye
+    await cacheSet(cacheKey, books, TTL.BOOKS_LIST);
+
+    res.json(books);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// @route  GET /api/books/:id
+const getBookById = async (req, res) => {
+  try {
+    const cacheKey = CACHE_KEYS.bookDetail(req.params.id);
+
+    const cached = await cacheGet(cacheKey);
+    if (cached) {
+      return res.json(cached);
+    }
+
+    const book = await prisma.book.findUnique({
+      where: { id: req.params.id },
+    });
+
+    if (!book) return res.status(404).json({ message: "Book not found" });
+
+    await cacheSet(cacheKey, book, TTL.BOOK_DETAIL);
+
+    res.json(book);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// @route  POST /api/books
 const createBook = async (req, res) => {
   try {
     const { title, author, isbn, genre, totalCopies } = req.body;
+
     if (!title || !author || !isbn) {
       return res.status(400).json({ message: "Title, author and ISBN are required" });
     }
+
     const copies = Number(totalCopies) || 1;
     const book = await prisma.book.create({
       data: {
@@ -19,6 +73,9 @@ const createBook = async (req, res) => {
         coverImage: req.file ? `/uploads/books/${req.file.filename}` : null,
       },
     });
+
+    // Naya book add hua — books list cache stale ho gayi, delete karo
+    await cacheClear("books:*");
 
     await auditLog({
       userId: req.user.id,
@@ -36,25 +93,7 @@ const createBook = async (req, res) => {
   }
 };
 
-const getBooks = async (req, res) => {
-  try {
-    const books = await prisma.book.findMany({ orderBy: { createdAt: "desc" } });
-    res.json(books);
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-};
-
-const getBookById = async (req, res) => {
-  try {
-    const book = await prisma.book.findUnique({ where: { id: req.params.id } });
-    if (!book) return res.status(404).json({ message: "Book not found" });
-    res.json(book);
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-};
-
+// @route  PUT /api/books/:id
 const updateBook = async (req, res) => {
   try {
     const book = await prisma.book.findUnique({ where: { id: req.params.id } });
@@ -92,6 +131,10 @@ const updateBook = async (req, res) => {
       },
     });
 
+    // Book update hui — related cache invalidate karo
+    await cacheDel(CACHE_KEYS.bookDetail(req.params.id)); // specific book cache
+    await cacheClear("books:*");                           // list cache bhi
+
     await auditLog({
       userId: req.user.id,
       action: "BOOK_UPDATED",
@@ -108,6 +151,7 @@ const updateBook = async (req, res) => {
   }
 };
 
+// @route  DELETE /api/books/:id
 const deleteBook = async (req, res) => {
   try {
     const book = await prisma.book.findUnique({ where: { id: req.params.id } });
@@ -119,6 +163,10 @@ const deleteBook = async (req, res) => {
     }
 
     await prisma.book.delete({ where: { id: req.params.id } });
+
+    // Book delete hui — cache saaf karo
+    await cacheDel(CACHE_KEYS.bookDetail(req.params.id));
+    await cacheClear("books:*");
 
     await auditLog({
       userId: req.user.id,
@@ -135,6 +183,7 @@ const deleteBook = async (req, res) => {
   }
 };
 
+// @route  POST /api/books/:id/cover
 const uploadBookCover = async (req, res) => {
   try {
     const book = await prisma.book.findUnique({ where: { id: req.params.id } });
@@ -151,10 +200,16 @@ const uploadBookCover = async (req, res) => {
       data: { coverImage: `/uploads/books/${req.file.filename}` },
     });
 
+    // Cover change hua — book detail cache stale ho gayi
+    await cacheDel(CACHE_KEYS.bookDetail(req.params.id));
+    await cacheClear("books:*");
+
     res.json({ message: "Cover image uploaded successfully", book: updated });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 };
 
-module.exports = { createBook, getBooks, getBookById, updateBook, deleteBook, uploadBookCover };
+module.exports = {
+  createBook, getBooks, getBookById, updateBook, deleteBook, uploadBookCover,
+};
