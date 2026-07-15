@@ -95,10 +95,29 @@ const sendReturnConfirmationEmail = async (user, book) => {
   });
   console.log(`📬 Return confirmation job queued for: ${user.email}`);
 };
+const sendDueReminderEmail = async (user, book, dueDate) => {
+  await emailQueue.add(EMAIL_JOBS.DUE_REMINDER, {
+    to: user.email,
+    subject: "📚 Book Due Tomorrow — Library Reminder",
+    templateName: "dueReminder",
+    data: {
+      userName: user.name,
+      bookTitle: book.title,
+      dueDate: new Date(dueDate).toLocaleDateString("en-IN", {
+        weekday: "long",
+        day: "numeric",
+        month: "long",
+        year: "numeric",
+      }),
+    },
+  });
+  console.log(`📬 Due reminder queued for: ${user.email} (${book.title})`);
+};
 
 module.exports = {
-  sendEmail,           // worker use karta hai
+  sendEmail,
   sendFineNoticeEmail,
   sendReservationReadyEmail,
   sendReturnConfirmationEmail,
+  sendDueReminderEmail,  
 };
