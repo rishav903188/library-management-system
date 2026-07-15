@@ -4,6 +4,12 @@ const swaggerUi = require("swagger-ui-express");
 const swaggerSpec = require("./config/swagger");
 const { loginLimiter, apiLimiter, publicLimiter } = require("./middlewares/rateLimiter.middleware");
 
+// Bull Board
+const { createBullBoard } = require("@bull-board/api");
+const { BullMQAdapter } = require("@bull-board/api/bullMQAdapter");
+const { ExpressAdapter } = require("@bull-board/express");
+const emailQueue = require("./jobs/queues/email.queue");
+
 const authRoutes           = require("./routes/auth.routes");
 const bookRoutes           = require("./routes/book.routes");
 const borrowRoutes         = require("./routes/borrow.routes");
@@ -19,14 +25,33 @@ app.use(express.json());
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
 // Swagger
-app.use("/api/docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
-  customSiteTitle: "Library API Docs",
-  swaggerOptions: { persistAuthorization: true },
-}));
+app.use(
+  "/api/docs",
+  swaggerUi.serve,
+  swaggerUi.setup(swaggerSpec, {
+    customSiteTitle: "Library API Docs",
+    swaggerOptions: { persistAuthorization: true },
+  })
+);
+
 app.get("/api/docs.json", (req, res) => {
   res.setHeader("Content-Type", "application/json");
   res.send(swaggerSpec);
 });
+
+// ─────────────────────────────────────────────────────────
+// Bull Board Dashboard
+// ─────────────────────────────────────────────────────────
+const serverAdapter = new ExpressAdapter();
+serverAdapter.setBasePath("/admin/queues");
+
+createBullBoard({
+  queues: [new BullMQAdapter(emailQueue)],
+  serverAdapter,
+});
+
+// Production me yaha auth middleware lagana
+app.use("/admin/queues", serverAdapter.getRouter());
 
 app.get("/", (req, res) => {
   res.json({
@@ -39,32 +64,32 @@ app.get("/", (req, res) => {
 // Routes with Rate Limiters
 // ─────────────────────────────────────────────────────────
 
-// Auth — login pe strict limiter, register pe public limiter
-app.use("/api/auth/login",    loginLimiter);
+// Auth
+app.use("/api/auth/login", loginLimiter);
 app.use("/api/auth/register", publicLimiter);
-app.use("/api/auth",          authRoutes);
+app.use("/api/auth", authRoutes);
 
-// Books — GET public (publicLimiter), POST/PUT/DELETE protected (apiLimiter route level pe)
-app.use("/api/books",         publicLimiter, bookRoutes);
+// Books
+app.use("/api/books", publicLimiter, bookRoutes);
 
-// Borrow, Fines, Reports, Reservations — authenticated
-app.use("/api/borrow",         apiLimiter, borrowRoutes);
-app.use("/api/fines",          apiLimiter, fineRoutes);
-app.use("/api/reservations",   apiLimiter, reservationRoutes);
-app.use("/api/reports",        apiLimiter, reportRoutes);
+// Protected APIs
+app.use("/api/borrow", apiLimiter, borrowRoutes);
+app.use("/api/fines", apiLimiter, fineRoutes);
+app.use("/api/reservations", apiLimiter, reservationRoutes);
+app.use("/api/reports", apiLimiter, reportRoutes);
 
-// Admin — admin/librarian only — generous limit (admin kaam karta hai)
-app.use("/api/admin",          apiLimiter, adminRoutes);
+// Admin
+app.use("/api/admin", apiLimiter, adminRoutes);
 
-// Recommendations — public browse ke liye
+// Recommendations
 app.use("/api/recommendations", publicLimiter, recommendationRoutes);
 
-// 404 handler
+// 404
 app.use((req, res) => {
   res.status(404).json({ message: "Route not found" });
 });
 
-// Error handler
+// Error Handler
 app.use((err, req, res, next) => {
   console.error(err.stack);
   res.status(500).json({ message: "Something went wrong" });
