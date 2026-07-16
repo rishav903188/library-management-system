@@ -1,7 +1,9 @@
+// src/controllers/auth.controller.js
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcryptjs");
 const prisma = require("../config/prisma");
 const { auditLog } = require("../services/audit.service");
+const { cacheClear } = require("../utils/cache");  // ← ADDED
 
 const generateToken = (id) => {
   return jwt.sign({ id }, process.env.JWT_SECRET, {
@@ -30,6 +32,8 @@ const registerUser = async (req, res) => {
       data: { name, email, password: hashedPassword },
       select: { id: true, name: true, email: true, role: true },
     });
+
+    await cacheClear("analytics:overview");  // ← ADDED (sirf overview, totalUsers change hua)
 
     await auditLog({
       userId: user.id,

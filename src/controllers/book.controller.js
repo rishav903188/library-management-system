@@ -76,6 +76,7 @@ const createBook = async (req, res) => {
 
     // Naya book add hua — books list cache stale ho gayi, delete karo
     await cacheClear("books:*");
+    await cacheClear("analytics:*");   // ← ADDED
 
     await auditLog({
       userId: req.user.id,
@@ -134,6 +135,7 @@ const updateBook = async (req, res) => {
     // Book update hui — related cache invalidate karo
     await cacheDel(CACHE_KEYS.bookDetail(req.params.id)); // specific book cache
     await cacheClear("books:*");                           // list cache bhi
+    await cacheClear("analytics:*");                       // ← ADDED
 
     await auditLog({
       userId: req.user.id,
@@ -167,6 +169,7 @@ const deleteBook = async (req, res) => {
     // Book delete hui — cache saaf karo
     await cacheDel(CACHE_KEYS.bookDetail(req.params.id));
     await cacheClear("books:*");
+    await cacheClear("analytics:*");   // ← ADDED
 
     await auditLog({
       userId: req.user.id,
@@ -203,6 +206,7 @@ const uploadBookCover = async (req, res) => {
     // Cover change hua — book detail cache stale ho gayi
     await cacheDel(CACHE_KEYS.bookDetail(req.params.id));
     await cacheClear("books:*");
+    await cacheClear("analytics:*");   // ← ADDED
 
     res.json({ message: "Cover image uploaded successfully", book: updated });
   } catch (err) {

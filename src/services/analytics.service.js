@@ -1,7 +1,14 @@
 const prisma = require("../config/prisma");
+const { cacheGet, cacheSet, CACHE_KEYS, TTL } = require("../utils/cache");
 
 const getOverview = async () => {
-  // Promise.all — sab counts parallel me chalenge, sequential nahi
+  const cacheKey = CACHE_KEYS.analyticsOverview();
+
+  // Cache check
+  const cached = await cacheGet(cacheKey);
+  if (cached) return cached;
+
+  // DB se fetch
   const [totalBooks, totalUsers, activeBorrows, waitingReservations, fineGroups] =
     await Promise.all([
       prisma.book.count(),
@@ -17,22 +24,30 @@ const getOverview = async () => {
   const finesByStatus = { paid: 0, unpaid: 0, waived: 0 };
   fineGroups.forEach((g) => {
     finesByStatus[g.status] = Number(g._sum.amount) || 0;
-    // Number() kyun? Prisma Decimal type return karta hai — plain number chahiye
   });
 
-  return {
+  const result = {
     totalBooks,
     totalUsers,
     activeBorrows,
     waitingReservations,
     finesCollected: finesByStatus.paid,
-    finesPending: finesByStatus.unpaid,
-    finesWaived: finesByStatus.waived,
+    finesPending:   finesByStatus.unpaid,
+    finesWaived:    finesByStatus.waived,
   };
+
+  // Cache me store karo
+  await cacheSet(cacheKey, result, TTL.ANALYTICS_OVERVIEW);
+
+  return result;
 };
 
 const getMostBorrowedBooks = async (limit = 5) => {
-  // Prisma ka groupBy — MongoDB ke $group jaisa
+  const cacheKey = CACHE_KEYS.analyticsMostBorrowed(limit);
+
+  const cached = await cacheGet(cacheKey);
+  if (cached) return cached;
+
   const grouped = await prisma.borrow.groupBy({
     by: ["bookId"],
     _count: { id: true },
@@ -40,21 +55,28 @@ const getMostBorrowedBooks = async (limit = 5) => {
     take: limit,
   });
 
-  // groupBy se sirf bookId aur count milta hai — book details alag fetch karni padegi
   const bookIds = grouped.map((g) => g.bookId);
   const books = await prisma.book.findMany({
     where: { id: { in: bookIds } },
     select: { id: true, title: true, author: true, genre: true },
   });
 
-  // Dono ko combine karo
-  return grouped.map((g) => ({
+  const result = grouped.map((g) => ({
     ...books.find((b) => b.id === g.bookId),
     borrowCount: g._count.id,
   }));
+
+  await cacheSet(cacheKey, result, TTL.ANALYTICS_POPULAR);
+
+  return result;
 };
 
 const getOverdueBorrows = async () => {
+  const cacheKey = CACHE_KEYS.analyticsOverdue();
+
+  const cached = await cacheGet(cacheKey);
+  if (cached) return cached;
+
   const overdue = await prisma.borrow.findMany({
     where: {
       status: "borrowed",
@@ -67,13 +89,18 @@ const getOverdueBorrows = async () => {
     orderBy: { dueDate: "asc" },
   });
 
-  return overdue.map((b) => ({
-    borrowId: b.id,
-    user: b.user,
-    book: b.book,
-    dueDate: b.dueDate,
+  const result = overdue.map((b) => ({
+    borrowId:    b.id,
+    user:        b.user,
+    book:        b.book,
+    dueDate:     b.dueDate,
     daysOverdue: Math.ceil((new Date() - b.dueDate) / (1000 * 60 * 60 * 24)),
   }));
+
+  // Overdue list time-sensitive — short TTL (2 min)
+  await cacheSet(cacheKey, result, TTL.ANALYTICS_OVERDUE);
+
+  return result;
 };
 
 module.exports = { getOverview, getMostBorrowedBooks, getOverdueBorrows };

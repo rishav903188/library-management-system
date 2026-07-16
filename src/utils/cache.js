@@ -1,24 +1,22 @@
-// src/utils/cache.js
 const { getRedisClient } = require("../config/redis");
 
-// TTL constants — ek jagah define, sab jagah reuse
 const TTL = {
-  BOOKS_LIST:   60 * 5,   // 5 minutes
-  BOOK_DETAIL:  60 * 10,  // 10 minutes
-  DEFAULT:      60 * 5,   // fallback
+  BOOKS_LIST:          60 * 5,    // 5 minutes
+  BOOK_DETAIL:         60 * 10,   // 10 minutes
+  ANALYTICS_OVERVIEW:  60 * 5,    // 5 minutes — dashboard top cards
+  ANALYTICS_POPULAR:   60 * 10,   // 10 minutes — most borrowed changes slowly
+  ANALYTICS_OVERDUE:   60 * 2,    // 2 minutes — overdue list time-sensitive hai
+  DEFAULT:             60 * 5,
 };
 
-// Cache Key builders — string concatenation ki jagah functions use karo
-// Isse typos avoid hote hain aur key format consistent rehta hai
 const CACHE_KEYS = {
-  booksList: ()       => "books:all",
-  bookDetail: (id)    => `books:${id}`,
+  booksList:               ()      => "books:all",
+  bookDetail:              (id)    => `books:${id}`,
+  analyticsOverview:       ()      => "analytics:overview",
+  analyticsMostBorrowed:   (limit) => `analytics:most-borrowed:${limit}`,
+  analyticsOverdue:        ()      => "analytics:overdue",
 };
 
-/**
- * Cache se value lo.
- * Returns parsed value ya null (cache miss ya Redis down).
- */
 const cacheGet = async (key) => {
   try {
     const client = getRedisClient();
@@ -31,13 +29,10 @@ const cacheGet = async (key) => {
     return null;
   } catch (err) {
     console.error(`Cache GET failed [${key}]:`, err.message);
-    return null; // graceful degradation — DB se fetch hoga
+    return null;
   }
 };
 
-/**
- * Cache me value set karo with TTL.
- */
 const cacheSet = async (key, value, ttl = TTL.DEFAULT) => {
   try {
     const client = getRedisClient();
@@ -45,13 +40,9 @@ const cacheSet = async (key, value, ttl = TTL.DEFAULT) => {
     console.log(`✅ Cache SET: ${key} (TTL: ${ttl}s)`);
   } catch (err) {
     console.error(`Cache SET failed [${key}]:`, err.message);
-    // Silently fail — response already DB se aa chuka hai
   }
 };
 
-/**
- * Single key delete.
- */
 const cacheDel = async (key) => {
   try {
     const client = getRedisClient();
@@ -62,13 +53,6 @@ const cacheDel = async (key) => {
   }
 };
 
-/**
- * Pattern se matching saari keys delete karo.
- * e.g., cacheClear("books:*") — saari books cache entries hata do
- *
- * ⚠️  Production warning: KEYS command O(N) hai — bahut badi Redis me slow ho sakta hai.
- * Production me SCAN use karna chahiye. Abhi dev ke liye KEYS theek hai.
- */
 const cacheClear = async (pattern) => {
   try {
     const client = getRedisClient();

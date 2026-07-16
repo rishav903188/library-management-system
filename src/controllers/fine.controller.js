@@ -1,5 +1,7 @@
+// src/controllers/fine.controller.js
 const prisma = require("../config/prisma");
 const { auditLog } = require("../services/audit.service");
+const { cacheClear } = require("../utils/cache");  // ← ADDED
 
 const getMyFines = async (req, res) => {
   try {
@@ -30,6 +32,8 @@ const payFine = async (req, res) => {
       data: { status: "paid", paidAt: new Date() },
     });
 
+    await cacheClear("analytics:*");   // ← ADDED
+
     await auditLog({
       userId: req.user.id,
       action: "FINE_PAID",
@@ -57,6 +61,8 @@ const waiveFine = async (req, res) => {
       where: { id: req.params.id },
       data: { status: "waived" },
     });
+
+    await cacheClear("analytics:*");   // ← ADDED
 
     await auditLog({
       userId: req.user.id,
